@@ -1,0 +1,130 @@
+﻿@page "/searchshows"
+@using MovieActorLookup.Models
+@inject ShowService ShowService
+@rendermode InteractiveServer
+
+<h3>Search for Actor by TV Show and Character Name</h3>
+
+<div class="mb-3">
+    <input type="text" class="form-control" @bind="_tvTitle" placeholder="Enter show title..." />
+    <input type="text" class="form-control" @bind="_characterName" placeholder="Enter character name..." />
+    <button class="btn btn-primary mt-2" @onclick="SearchForActorAndCharacters">Search</button>
+</div>
+
+@if (_isSearching)
+{
+    <p>Searching...</p>
+}
+else if (_actor != null)
+{
+    <h4>Actor: @_actor.Name</h4>
+
+    @if (_matchedShow != null)
+    {
+        <div class="card m-2" style="width: 18rem;">
+            <img class="card-img-top" src="@($"https://image.tmdb.org/t/p/w500{_matchedShow.ShowPosterPath}")" alt="Show Poster">
+            <div class="card-body">
+                <h5 class="card-title">@_matchedShow.ShowTitle</h5>
+                <h10 class="card-text">@_matchedShow.CharacterName</h10>
+                <br />
+                <small class="text-muted">First Air Date: @_matchedShow.FirstAirDate</small>
+            </div>
+        </div>
+    }
+
+    @foreach (var group in _actor.TvCharacters
+      .GroupBy(tc => tc.Franchise)
+      .OrderBy(g => g.Key == "Standalone")
+      .ThenBy(g => g.Key))
+    {
+        <div class="d-flex flex-wrap">
+            @foreach (var show in (group.Key == "Standalone"
+               ? group.OrderByDescending(tc => DateTime.TryParse(tc.FirstAirDate, out var d) ? d : DateTime.MinValue)
+               : group.OrderBy(tc => DateTime.TryParse(tc.FirstAirDate, out var d) ? d : DateTime.MaxValue)))
+            {
+                <div class="card m-2" style="width: 18rem;">
+                    <img class="card-img-top" src="@($"https://image.tmdb.org/t/p/w500{show.ShowPosterPath}")" alt="Poster">
+                    <div class="card-body">
+                        <h5 class="card-title">@show.ShowTitle</h5>
+                        <h10 class="card-text">@show.CharacterName</h10>
+                        <p class="text-muted">@show.Overview</p>
+                        <small class="text-muted">First Air Date: @show.FirstAirDate</small>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+else
+{
+    <p>Enter a TV show title and character name to begin your search.</p>
+}
+
+@code {
+    private string _tvTitle;
+    private string _characterName;
+    private Actor _actor;
+    private TvCharacter _matchedShow;
+    private bool _isSearching = false;
+
+    private async Task SearchForActorAndCharacters()
+    {
+        _isSearching = true;
+        _actor = null;
+        _matchedShow = null;
+        StateHasChanged();
+
+        if (!string.IsNullOrWhiteSpace(_tvTitle) && !string.IsNullOrWhiteSpace(_characterName))
+        {
+            var shows = await ShowService.GetShowsByTitle(_tvTitle);
+            foreach (var show in shows)
+            {
+                var credits = await ShowService.GetShowCreditsById(show.Id);
+                foreach (var cast in credits.Cast)
+                {
+                    if (cast.Character.ToLower().Contains(_characterName.ToLower()))
+                    {
+                        if (_actor == null)
+                        {
+                            _actor = new Actor(cast.Name);
+                            int personId = cast.Id;
+
+                            var filmography = await ShowService.GetActorTvCreditsById(personId);
+                            if (filmography?.Cast != null)
+                            {
+                                foreach (var role in filmography.Cast)
+                                {
+                                    var fullShow = await ShowService.GetShowDetailsById(role.Id);
+
+                                    var tvCharacter = new TvCharacter
+                                        {
+                                            ShowTitle = role.ShowTitle,
+                                            CharacterName = role.Character,
+                                            ShowPosterPath = role.PosterPath,
+                                            FirstAirDate = DateTime.TryParse(fullShow?.FirstAirDate, out var parsedDate)
+                                                ? parsedDate.ToString("MM/dd/yyyy")
+                                                : "N/A",
+                                            Overview = fullShow?.Overview ?? "",
+                                            Franchise = fullShow?.BelongsToCollection?.Name ?? "Standalone"
+                                        };
+
+                                    _actor.TvCharacters.Add(tvCharacter);
+
+                                    if (_matchedShow == null &&
+                                        role.ShowTitle == show.Name &&
+                                        role.Character == cast.Character)
+                                    {
+                                        _matchedShow = tvCharacter;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        _isSearching = false;
+        StateHasChanged();
+    }
+}

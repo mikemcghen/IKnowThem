@@ -1,0 +1,156 @@
+﻿@page "/searchmovies"
+@using MovieActorLookup.Models
+@using MovieActorLookup.Models.Movies
+@using System.ComponentModel.DataAnnotations
+@inject MovieService MovieService
+@rendermode InteractiveServer
+
+<h3>Search for Actor by Movie and Character Name</h3>
+
+<div class="mb-3">
+    <input type="text" class="form-control" @bind="_movieTitle" placeholder="Enter movie title..." />
+    <input type="text" class="form-control" @bind="_characterName" placeholder="Enter character name..." />
+    <button class="btn btn-primary mt-2" @onclick="SearchForActorAndCharacters">Search</button>
+</div>
+
+@if (_isSearching)
+{
+    <p>Searching...</p>
+}
+
+else if (_actor != null)
+{
+    <h4>Actor: @_actor.Name</h4>
+
+    @if (_matchedMovie != null)
+    {
+        <div class="card m-2" style="width: 18rem;">
+            <img class="card-img-top" src="@($"https://image.tmdb.org/t/p/w500{_matchedMovie.MoviePosterPath}")" alt="Movie Poster">
+            <div class="card-body">
+                <h5 class="card-title">@_matchedMovie.MovieTitle</h5>
+                <h10 class="card-text">@_matchedMovie.CharacterName</h10>
+                <br />
+                <small class="card-text">@_matchedMovie.Franchise</small>
+                <small class="text-muted">Release Date: @_matchedMovie.ReleaseDate</small>
+            </div>
+        </div>
+    }
+
+    @foreach (var franchiseGroup in _actor.MovieCharacters
+       .GroupBy(mc => mc.Franchise)
+       .OrderBy(g => g.Key == "Standalone")
+       .ThenBy(g => g.Key))
+    {
+        <h5 class="mt-4">@franchiseGroup.Key</h5>
+        <div class="d-flex flex-wrap">
+            @foreach (var movieCharacter in (franchiseGroup.Key == "Standalone"
+           ? franchiseGroup.OrderByDescending(mc =>
+           DateTime.TryParse(mc.ReleaseDate, out var d) ? d : DateTime.MinValue)
+           : franchiseGroup.OrderBy(mc =>
+           DateTime.TryParse(mc.ReleaseDate, out var d) ? d : DateTime.MaxValue)))
+            {
+                <div class="card m-2" style="width: 18rem;">
+                    <img class="card-img-top" src="@($"https://image.tmdb.org/t/p/w500{movieCharacter.MoviePosterPath}")" alt="Movie Poster">
+                    <div class="card-body">
+                        <h5 class="card-title">@movieCharacter.MovieTitle</h5>
+                        <h10 class="card-text">@movieCharacter.CharacterName</h10>
+                        <p class="text-muted">@movieCharacter.Overview</p>
+                        <small class="text-muted">Release Date: @movieCharacter.ReleaseDate</small>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+else
+{
+    <p>Enter a movie title and character name to begin your search.</p>
+}
+
+@code {
+    private string _movieTitle;
+    private string _characterName;
+    private Actor _actor;
+    private MovieCharacter _matchedMovie;
+    private bool _isSearching = false;
+
+    private async Task SearchForActorAndCharacters()
+    {
+        _isSearching = true;
+        _actor = null;
+        _matchedMovie = null; // reset matched movie
+        StateHasChanged();
+
+        if (!string.IsNullOrWhiteSpace(_movieTitle) && !string.IsNullOrWhiteSpace(_characterName))
+        {
+            var movies = await MovieService.GetMoviesByTitle(_movieTitle);
+            foreach (var movie in movies)
+            {
+                var credits = await MovieService.GetMovieCreditsByMovieId(movie.Id);
+                foreach (var castMember in credits.Cast)
+                {
+                    if (castMember.Character.ToLower().Contains(_characterName.ToLower()))
+                    {
+                        if (_actor == null)
+                        {
+                            _actor = new Actor(castMember.Name);
+                            int personId = castMember.Id;
+
+                            var filmography = await MovieService.GetActorMovieCreditsById(personId);
+                            if (filmography?.Cast != null)
+                            {
+                                foreach (var role in filmography.Cast)
+                                {
+                                    var fullMovie = await MovieService.GetMovieDetailsById(role.Id);
+
+                                    var movieCharacter = new MovieCharacter
+                                    {
+                                        MovieTitle = role.Title,
+                                        CharacterName = role.Character,
+                                        MoviePosterPath = role.PosterPath,
+                                        ReleaseDate = DateTime.TryParse(fullMovie?.ReleaseDate, out var parsedDate)
+                                            ? parsedDate.ToString("MM/dd/yyyy")
+                                            : "N/A",
+                                        Overview = fullMovie?.Overview ?? "",
+                                        Franchise = fullMovie?.BelongsToCollection?.Name ?? "Standalone"
+                                    };
+
+                                    _actor.MovieCharacters.Add(movieCharacter);
+                                    
+                                    if (_matchedMovie == null)
+                                    {
+                                        if (role.Title == movie.Title && role.Character == castMember.Character)
+                                        {
+                                            _matchedMovie = movieCharacter;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        _isSearching = false;
+        StateHasChanged();
+    }
+
+
+    private async Task<Movie> GetProperMovieBasedOffOfActorInvolvement(string movieActorTitle, CastMember actor)
+    {
+        List<Credits> overallCredits = new();
+
+        List<Movie> actorMovies = await MovieService.GetMoviesByTitle(movieActorTitle);
+
+        foreach (Movie movie in actorMovies)
+        {
+            overallCredits.Add(await MovieService.GetMovieCreditsByMovieId(movie.Id));
+        }
+
+        Credits actorMovieCredits = overallCredits.FirstOrDefault(x => x.Cast.Any(c => c.Id == actor.Id));        
+        Movie movie1 = actorMovies.Where(x => x.Id == actorMovieCredits.Id).FirstOrDefault();
+
+        return movie1;
+    }
+}
